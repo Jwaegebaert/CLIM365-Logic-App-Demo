@@ -1,0 +1,287 @@
+/* 
+Replace the following placeholders:
+- [Subscription GUID] with the GUID of your Azure subscription
+- [Resource Group Name] with the name of the resource group where the Managed Identity is created. Assumed to be the same resource group as the Logic App.
+- [Identity Name] with the name of the Managed Identity (User Assigned Identity)
+*/
+
+{
+  "definition": {
+      "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+      "actions": {
+          "Create_or_update_a_container_group": {
+              "inputs": {
+                  "body": {
+                      "identity": {
+                          "type": "UserAssigned",
+                          "userAssignedIdentities": {
+                              "/subscriptions/[Subscription GUID]/resourcegroups/[Resource Group Name]/providers/microsoft.managedidentity/userassignedidentities/[Identity Name]": {}
+                          }
+                      },
+                      "location": "westeurope",
+                      "properties": {
+                          "containers": [
+                              {
+                                  "name": "@variables('ctrName')",
+                                  "properties": {
+                                      "command": [
+                                          "pwsh",
+                                          "/mnt/repo/scripts/GetCheckedOutFiles.ps1"
+                                      ],
+                                      "image": "m365pnp/cli-microsoft365",
+                                      "resources": {
+                                          "requests": {
+                                              "cpu": 1,
+                                              "memoryInGB": 1.5
+                                          }
+                                      },
+                                      "volumeMounts": [
+                                          {
+                                              "mountPath": "/mnt/repo",
+                                              "name": "gitrepo"
+                                          }
+                                      ]
+                                  }
+                              }
+                          ],
+                          "osType": "Linux",
+                          "restartPolicy": "OnFailure",
+                          "sku": "Standard",
+                          "volumes": [
+                              {
+                                  "gitRepo": {
+                                      "directory": ".",
+                                      "repository": "https://github.com/Jwaegebaert/CLIM365-Logic-App-Demo.git"
+                                  },
+                                  "name": "gitrepo"
+                              }
+                          ]
+                      }
+                  },
+                  "host": {
+                      "connection": {
+                          "name": "@parameters('$connections')['aci']['connectionId']"
+                      }
+                  },
+                  "method": "put",
+                  "path": "/subscriptions/@{encodeURIComponent('[Subscription GUID]')}/resourceGroups/@{encodeURIComponent('[Resource Group Name]')}/providers/Microsoft.ContainerInstance/containerGroups/@{encodeURIComponent(variables('ctrGroup'))}",
+                  "queries": {
+                      "x-ms-api-version": "2019-12-01"
+                  }
+              },
+              "runAfter": {
+                  "Initialize_ctrName": [
+                      "Succeeded"
+                  ]
+              },
+              "type": "ApiConnection"
+          },
+          "Do_until_the_logs_are_available": {
+              "actions": {
+                  "Check_if_container_group_state_is_successfull": {
+                      "actions": {
+                          "Delete_the_container_group": {
+                              "inputs": {
+                                  "host": {
+                                      "connection": {
+                                          "name": "@parameters('$connections')['aci']['connectionId']"
+                                      }
+                                  },
+                                  "method": "delete",
+                                  "path": "/subscriptions/@{encodeURIComponent('[Subscription GUID]')}/resourceGroups/@{encodeURIComponent('[Resource Group Name]')}/providers/Microsoft.ContainerInstance/containerGroups/@{encodeURIComponent(variables('ctrGroup'))}",
+                                  "queries": {
+                                      "x-ms-api-version": "2019-12-01"
+                                  }
+                              },
+                              "runAfter": {
+                                  "Get_logs_from_the_container_instance": [
+                                      "Succeeded"
+                                  ]
+                              },
+                              "type": "ApiConnection"
+                          },
+                          "Get_logs_from_the_container_instance": {
+                              "inputs": {
+                                  "host": {
+                                      "connection": {
+                                          "name": "@parameters('$connections')['aci']['connectionId']"
+                                      }
+                                  },
+                                  "method": "get",
+                                  "path": "/subscriptions/@{encodeURIComponent('[Subscription GUID]')}/resourceGroups/@{encodeURIComponent('[Resource Group Name]')}/providers/Microsoft.ContainerInstance/containerGroups/@{encodeURIComponent(variables('ctrGroup'))}/containers/@{encodeURIComponent(variables('ctrName'))}/logs",
+                                  "queries": {
+                                      "x-ms-api-version": "2019-12-01"
+                                  }
+                              },
+                              "runAfter": {},
+                              "type": "ApiConnection"
+                          },
+                          "Update_doWhileRetry_to_false": {
+                              "inputs": {
+                                  "name": "doWhileRetry",
+                                  "value": false
+                              },
+                              "runAfter": {
+                                  "Delete_the_container_group": [
+                                      "Succeeded"
+                                  ]
+                              },
+                              "type": "SetVariable"
+                          }
+                      },
+                      "else": {
+                          "actions": {
+                              "Delay_for_10_seconds": {
+                                  "inputs": {
+                                      "interval": {
+                                          "count": 10,
+                                          "unit": "Second"
+                                      }
+                                  },
+                                  "runAfter": {},
+                                  "type": "Wait"
+                              }
+                          }
+                      },
+                      "expression": {
+                          "or": [
+                              {
+                                  "equals": [
+                                      "@body('Get_properties_of_the_container_group')?['properties']?['instanceView']?['state']",
+                                      "Succeeded"
+                                  ]
+                              },
+                              {
+                                  "equals": [
+                                      "@body('Get_properties_of_the_container_group')?['properties']?['instanceView']?['state']",
+                                      "Terminated"
+                                  ]
+                              }
+                          ]
+                      },
+                      "runAfter": {
+                          "Get_properties_of_the_container_group": [
+                              "Succeeded"
+                          ]
+                      },
+                      "type": "If"
+                  },
+                  "Get_properties_of_the_container_group": {
+                      "inputs": {
+                          "host": {
+                              "connection": {
+                                  "name": "@parameters('$connections')['aci']['connectionId']"
+                              }
+                          },
+                          "method": "get",
+                          "path": "/subscriptions/@{encodeURIComponent('[Subscription GUID]')}/resourceGroups/@{encodeURIComponent('[Resource Group Name]')}/providers/Microsoft.ContainerInstance/containerGroups/@{encodeURIComponent(variables('ctrGroup'))}",
+                          "queries": {
+                              "x-ms-api-version": "2019-12-01"
+                          }
+                      },
+                      "runAfter": {},
+                      "type": "ApiConnection"
+                  }
+              },
+              "expression": "@equals(variables('doWhileRetry'), false)",
+              "limit": {
+                  "count": 60,
+                  "timeout": "PT1H"
+              },
+              "runAfter": {
+                  "Create_or_update_a_container_group": [
+                      "Succeeded"
+                  ]
+              },
+              "type": "Until"
+          },
+          "Initialize_ctrGroup": {
+              "inputs": {
+                  "variables": [
+                      {
+                          "name": "ctrGroup",
+                          "type": "string",
+                          "value": "cli-demo-ctr-group"
+                      }
+                  ]
+              },
+              "runAfter": {
+                  "Initialize_doWhileRetry": [
+                      "Succeeded"
+                  ]
+              },
+              "type": "InitializeVariable"
+          },
+          "Initialize_ctrName": {
+              "inputs": {
+                  "variables": [
+                      {
+                          "name": "ctrName",
+                          "type": "string",
+                          "value": "cli-demo-ctr-name"
+                      }
+                  ]
+              },
+              "runAfter": {
+                  "Initialize_ctrGroup": [
+                      "Succeeded"
+                  ]
+              },
+              "type": "InitializeVariable"
+          },
+          "Initialize_doWhileRetry": {
+              "inputs": {
+                  "variables": [
+                      {
+                          "name": "doWhileRetry",
+                          "type": "boolean",
+                          "value": true
+                      }
+                  ]
+              },
+              "runAfter": {},
+              "type": "InitializeVariable"
+          },
+          "Responed_with_the_content": {
+              "inputs": {
+                  "body": "@body('Get_logs_from_the_container_instance')?['content']",
+                  "statusCode": 202
+              },
+              "runAfter": {
+                  "Do_until_the_logs_are_available": [
+                      "Succeeded"
+                  ]
+              },
+              "type": "Response"
+          }
+      },
+      "contentVersion": "1.0.0.0",
+      "outputs": {},
+      "parameters": {
+          "$connections": {
+              "defaultValue": {},
+              "type": "Object"
+          }
+      },
+      "triggers": {
+          "request": {
+              "inputs": {
+                  "schema": {}
+              },
+              "kind": "Http",
+              "type": "Request"
+          }
+      }
+  },
+  "parameters": {
+      "$connections": {
+          "value": {
+              "aci": {
+                  "connectionId": "/subscriptions/[Subscription GUID]/resourceGroups/[Resource Group Name]/providers/Microsoft.Web/connections/aci",
+                  "connectionName": "aci",
+                  "id": "/subscriptions/[Subscription GUID]/providers/Microsoft.Web/locations/westeurope/managedApis/aci"
+              }
+          }
+      }
+  }
+}
